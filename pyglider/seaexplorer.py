@@ -65,6 +65,24 @@ def _get_raw_filenames(indir):
     return filenames_flat
 
 
+def _remove_bad_timestamps(ds):
+    time_ds = ds.time.values
+    time_diff = time_ds[1:] - time_ds[:-1]
+    if len(time_diff[time_diff < 0]) == 0:
+        return ds
+    good_timestep = np.ones(len(time_ds), dtype=bool)
+    steps = np.arange(1, len(time_ds))
+    bad_timestamps = steps[time_diff < 0]
+    for stamp in bad_timestamps:
+        last_good = time_ds[stamp - 1]
+        next_good = steps[time_ds[1:] > last_good][0]
+        good_timestep[stamp:next_good] = False
+    ds_out = ds.isel(time=good_timestep)
+    _log.info(f'negative timestep(s) of {time_diff[time_diff<0]} s identified. '
+              f'Removed {len(ds.time) - len(ds_out.time)} points.')
+    return ds_out
+
+
 def raw_to_rawnc(indir, outdir, deploymentyaml, incremental=True, min_samples_in_file=5, cores=None):
     """
     Convert seaexplorer text files to raw netcdf files.
@@ -175,9 +193,11 @@ def _raw_to_rawnc_worker(files, outdir, incremental=True, min_samples_in_file=5)
                 outx['fnum'] = ('time',
                     int(filenum) * np.ones(len(outx['time'])))
                 if ftype == 'gli':
+                    outx = _remove_bad_timestamps(outx)
                     outx.to_netcdf(fnout[:-3]+'.nc', 'w')
                 else:
                     if outx.indexes["time"].size > min_samples_in_file:
+                        outx = _remove_bad_timestamps(outx)
                         outx.to_netcdf(f'{fnout[:-3]}.nc', 'w',
                                        unlimited_dims=['time'])
                     else:
@@ -227,14 +247,9 @@ def merge_rawnc(indir, outdir, deploymentyaml, incremental=False, kind='raw'):
     if not files:
         _log.warning(f'No *gli*.nc files found in {indir}')
         return False
-    with xr.open_dataset(files[0], decode_times=False) as gli:
-        for fil in files[1:]:
-            try:
-                with xr.open_dataset(fil, decode_times=False) as gli2:
-                    gli = xr.concat([gli, gli2], dim='time')
-            except:
-                pass
-        gli.to_netcdf(outgli)
+    gli = xr.open_mfdataset(indir+'/*.gli.sub.*.nc', combine='by_coords', decode_times=False)
+    _log.info(f'Writing {outgli}')
+    gli.to_netcdf(outgli)
     _log.info(f'Done writing {outgli}')
 
     _log.info('Opening *.pld.sub.*.nc multi-file dataset')
@@ -242,14 +257,9 @@ def merge_rawnc(indir, outdir, deploymentyaml, incremental=False, kind='raw'):
     if not files:
         _log.warning(f'No *{kind}*.nc files found in {indir}')
         return False
-    with xr.open_dataset(files[0], decode_times=False) as pld:
-        for fil in files[1:]:
-            try:
-                with xr.open_dataset(fil, decode_times=False) as pld2:
-                    pld = xr.concat([pld, pld2], dim='time')
-            except:
-                pass
-        pld.to_netcdf(outpld)
+    pld = xr.open_mfdataset(indir+'/*.pld1.'+kind+'.*.nc', combine='by_coords', decode_times=False)
+    _log.info(f'Writing {outpld}')
+    pld.to_netcdf(outpld)
     _log.info(f'Done writing {outpld}')
     _log.info('Done merge_rawnc')
     return True
