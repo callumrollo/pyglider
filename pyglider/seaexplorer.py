@@ -298,6 +298,8 @@ def merge_rawnc(indir, outdir, deploymentyaml, incremental=False, kind='raw'):
         return False
     pld = xr.open_mfdataset(indir+'/*.pld1.'+kind+'.*.nc', combine='by_coords', decode_times=False,
                             preprocess=_subset_on_merge)
+    _log.info(f'Loading dataset to memory')
+    pld.load()
     _log.info(f'Writing {outpld}')
     pld.to_netcdf(outpld)
     _log.info(f'Done writing {outpld}')
@@ -360,7 +362,9 @@ def raw_to_L0timeseries(indir, outdir, deploymentyaml, kind='raw',
         indctd = np.where(~np.isnan(sensor.NAV_DEPTH))[0]
     ds['time'] = (('time'), sensor['time'].values[indctd], attr)
     thenames = list(ncvar.keys())
-    thenames.remove('time')
+    for i in ['time', 'timebase', 'keep_variables']:
+        if i in thenames:
+            thenames.remove(i)
     for name in thenames:
         _log.info('interpolating ' + name)
         if not('method' in ncvar[name].keys()):
