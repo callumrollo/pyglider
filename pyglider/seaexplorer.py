@@ -235,6 +235,45 @@ def merge_rawnc(indir, outdir, deploymentyaml, incremental=False, kind='raw'):
         Only add new files....
     """
 
+    def _subset_on_merge(sensor):
+        """
+        Reduces dataset to timepoints matching variables supplied in datasetyaml
+        Parameters
+        ----------
+        sensor: dataset of data loaded from one or more SeaExplorer pld1 file
+        Returns
+        -------
+        dataset subsampled to only points of interest
+
+        """
+        before_subset = len(sensor.time)
+        with open(deploymentyaml) as fin:
+            deployment = yaml.safe_load(fin)
+        ncvar = deployment['netcdf_variables']
+        if 'timebase' in ncvar:
+            indctd = np.where(~np.isnan(sensor[ncvar['timebase']['source']]))[0]
+        elif 'GPCTD_TEMPERATURE' in list(sensor.variables):
+            _log.warning('No timebase specified. Using GPCTD_TEMPERATURE as time base')
+            indctd = np.where(~np.isnan(sensor.GPCTD_TEMPERATURE))[0]
+        elif 'LEGATO_TEMPERATURE' in list(sensor.variables):
+            _log.warning('No timebase specified. Using LEGATO_TEMPERATURE as time base')
+            indctd = np.where(~np.isnan(sensor.LEGATO_TEMPERATURE))[0]
+        else:
+            _log.warning('No gpctd or legato data found. Using NAV_DEPTH as time base')
+            indctd = np.where(~np.isnan(sensor.NAV_DEPTH))[0]
+        sensor = sensor[dict(time=indctd)]
+        if 'keep_variables' in ncvar:
+            keeps = np.empty(len(sensor.NAV_LONGITUDE))
+            keeps[:] = np.nan
+            keeper_vars = ncvar['keep_variables']
+            for keep_var in keeper_vars:
+                keep_source = ncvar[keep_var]['source']
+                keeps[~np.isnan(sensor[keep_source].values)] = 1
+            sensor = sensor.where(~np.isnan(keeps))
+            sensor = sensor.dropna(dim='time', how='all')
+        _log.info(f'Input data reduced to {int(100 * len(sensor.time) / before_subset)} %')
+        return sensor
+
     with open(deploymentyaml) as fin:
         deployment = yaml.safe_load(fin)
     metadata = deployment['metadata']
@@ -257,7 +296,8 @@ def merge_rawnc(indir, outdir, deploymentyaml, incremental=False, kind='raw'):
     if not files:
         _log.warning(f'No *{kind}*.nc files found in {indir}')
         return False
-    pld = xr.open_mfdataset(indir+'/*.pld1.'+kind+'.*.nc', combine='by_coords', decode_times=False)
+    pld = xr.open_mfdataset(indir+'/*.pld1.'+kind+'.*.nc', combine='by_coords', decode_times=False,
+                            preprocess=_subset_on_merge)
     _log.info(f'Writing {outpld}')
     pld.to_netcdf(outpld)
     _log.info(f'Done writing {outpld}')
